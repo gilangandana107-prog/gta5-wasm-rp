@@ -101,24 +101,47 @@ impl PlayerSyncState {
         if b.len() < SYNC_STATE_SIZE {
             return None;
         }
-        let mut at = 0;
-        let mut u32_ = || {
-            let v = u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
-            at += 4;
+        fn read_u32(b: &[u8], at: &mut usize) -> u32 {
+            let v = u32::from_le_bytes(b[*at..*at + 4].try_into().unwrap());
+            *at += 4;
             v
-        };
-        let mut f32_ = || f32::from_bits(u32_());
-        let ped_model = u32_();
-        let pos = [f32_(), f32_(), f32_()];
-        let heading = f32_();
-        let vel = [f32_(), f32_(), f32_()];
+        }
+        fn read_f32(b: &[u8], at: &mut usize) -> f32 {
+            f32::from_bits(read_u32(b, at))
+        }
+
+        let mut at = 0;
+        let ped_model = read_u32(b, &mut at);
+        let pos = [
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+        ];
+        let heading = read_f32(b, &mut at);
+        let vel = [
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+        ];
         let flags = b[at];
         at += 1;
-        let veh_model = u32_();
-        let veh_pos = [f32_(), f32_(), f32_()];
-        let veh_rot = [f32_(), f32_(), f32_()];
-        let veh_vel = [f32_(), f32_(), f32_()];
-        let weapon = u32_();
+        let veh_model = read_u32(b, &mut at);
+        let veh_pos = [
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+        ];
+        let veh_rot = [
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+        ];
+        let veh_vel = [
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+            read_f32(b, &mut at),
+        ];
+        let weapon = read_u32(b, &mut at);
         let health = u16::from_le_bytes([b[at], b[at + 1]]);
         let armour = b[at + 2];
         let seat = b[at + 3] as i8;

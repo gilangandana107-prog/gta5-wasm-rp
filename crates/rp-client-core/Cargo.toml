@@ -8,6 +8,5 @@ description = "OS-agnostic Client Core (UDP Sync, Wasm Native RPC Executor, Mobi
 [dependencies]
 anyhow.workspace = true
 rp-proto = { path = "../rp-proto" }
-serde.workspace = true
 serde_json.workspace = true
 

@@ -68,6 +68,7 @@ jobs:
           path: |
             target/release/rp-server.exe
             target/release/rp-wasm-patcher.exe
+            target/release/rp-lite-trimmer.exe
             resources/
 
   # 3. Build macOS Apple Silicon + iOS ARM64 Library di Cloud Mac GitHub (0% Beban di Mac Lokal!)
@@ -86,7 +87,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build Release macOS Binaries
-        run: cargo build --release -p rp-server -p rp-wasm-patcher
+        run: cargo build --release -p rp-server -p rp-wasm-patcher -p rp-lite-trimmer
 
       - name: Build Cross-Platform Client Core for iOS (aarch64-apple-ios)
         env:
@@ -100,6 +101,7 @@ jobs:
           path: |
             target/release/rp-server
             target/release/rp-wasm-patcher
+            target/release/rp-lite-trimmer
             target/aarch64-apple-ios/release/librp_client_core.rlib
             resources/
 

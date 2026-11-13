@@ -22,6 +22,7 @@ pub struct TrimReport {
     pub kept_files: usize,
     pub stripped_files: usize,
     pub saved_by_category: BTreeMap<String, u64>,
+    pub kept_by_top_folder: BTreeMap<String, u64>,
     pub wasm_patched: bool,
 }
 
@@ -108,19 +109,35 @@ pub fn analyze_archive<R: Read + Seek>(reader: R) -> Result<TrimReport> {
                 *report.saved_by_category.entry(cat.to_string()).or_insert(0) += size;
                 continue;
             }
-        }
-
-        if (rel.starts_with("data/") || rel.starts_with("b/")) && !rel.ends_with('/') {
+            let top = data_rel.split('/').next().unwrap_or("root");
+            *report
+                .kept_by_top_folder
+                .entry(format!("data/{top}"))
+                .or_insert(0) += size;
             report.kept_files += 1;
             report.kept_bytes += size;
-        } else {
-            report.stripped_files += 1;
-            report.saved_bytes += size;
-            *report
-                .saved_by_category
-                .entry("non_game_extras".to_string())
-                .or_insert(0) += size;
+            continue;
         }
+
+        if let Some(build_rel) = rel.strip_prefix("b/") {
+            let inner = build_rel.split_once('/').map(|(_, r)| r).unwrap_or("");
+            if inner == "game.wasm" || inner.starts_with("shaders/") {
+                *report
+                    .kept_by_top_folder
+                    .entry("b/<build>".to_string())
+                    .or_insert(0) += size;
+                report.kept_files += 1;
+                report.kept_bytes += size;
+                continue;
+            }
+        }
+
+        report.stripped_files += 1;
+        report.saved_bytes += size;
+        *report
+            .saved_by_category
+            .entry("non_game_extras".to_string())
+            .or_insert(0) += size;
     }
 
     Ok(report)
@@ -347,3 +364,4 @@ mod tests {
         assert_eq!(remaining.len(), 2); // Only city.rpf & vehicles.rpf remain!
     }
 }
+

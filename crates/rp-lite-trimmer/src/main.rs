@@ -20,9 +20,15 @@ fn main() -> Result<()> {
             println!("Original size : {}", fmt_gb(report.original_bytes));
             println!("Lite RP size  : {}", fmt_gb(report.kept_bytes));
             println!("Total saved   : {}", fmt_gb(report.saved_bytes));
+            println!("Kept files    : {}", report.kept_files);
+            println!("Stripped files: {}", report.stripped_files);
             println!("Breakdown by stripped category:");
             for (cat, bytes) in &report.saved_by_category {
                 println!("  - {cat:<26}: {}", fmt_gb(*bytes));
+            }
+            println!("Breakdown of kept Lite RP folders:");
+            for (folder, bytes) in &report.kept_by_top_folder {
+                println!("  + {folder:<26}: {}", fmt_gb(*bytes));
             }
             Ok(())
         }
@@ -66,3 +72,4 @@ fn main() -> Result<()> {
         }
     }
 }
+

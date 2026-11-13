@@ -11,3 +11,4 @@ rp-wasm-patcher = { path = "../rp-wasm-patcher" }
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
+

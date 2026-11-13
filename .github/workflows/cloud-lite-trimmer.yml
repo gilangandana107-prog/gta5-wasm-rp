@@ -63,13 +63,26 @@ jobs:
             exit 1
           fi
 
-          mkdir -p /mnt/tmp-rp
+          sudo mkdir -p /mnt/tmp-rp
+          sudo chown -R "$(id -u):$(id -g)" /mnt/tmp-rp
+          MNT_FREE=$(df -Pk /mnt/tmp-rp | awk 'NR==2 {print $4}')
+          TMP_FREE=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')
+          if [ "$MNT_FREE" -ge "$TMP_FREE" ]; then
+            WORK_DIR="/mnt/tmp-rp"
+          else
+            WORK_DIR="$RUNNER_TEMP/tmp-rp"
+            mkdir -p "$WORK_DIR"
+          fi
+          echo "Ruang kerja sementara: $WORK_DIR"
+          df -h "$WORK_DIR"
+
           echo "[1/3] Mengunduh arsip sumber ke ruang kerja sementara..."
-          curl -fL --retry 3 -o /mnt/tmp-rp/source.zip "$SOURCE_ZIP_URL"
+          curl -fL -A "Mozilla/5.0" --retry 5 --retry-delay 3 --progress-bar -o "$WORK_DIR/source.zip" "$SOURCE_ZIP_URL"
+          ls -lh "$WORK_DIR/source.zip"
 
           if [ "$ANALYZE_ONLY" = "true" ]; then
-            ./target/release/rp-lite-trimmer --analyze /mnt/tmp-rp/source.zip
-            rm -rf /mnt/tmp-rp
+            ./target/release/rp-lite-trimmer --analyze "$WORK_DIR/source.zip"
+            rm -rf "$WORK_DIR"
             exit 0
           fi
 
@@ -78,13 +91,13 @@ jobs:
           if [ "$PATCH_WASM" = "true" ]; then
             EXTRA_FLAG="--patch-wasm"
           fi
-          ./target/release/rp-lite-trimmer --repack /mnt/tmp-rp/source.zip "/mnt/tmp-rp/$OUT_NAME" $EXTRA_FLAG
-          rm -f /mnt/tmp-rp/source.zip
-          ls -lh "/mnt/tmp-rp/$OUT_NAME"
+          ./target/release/rp-lite-trimmer --repack "$WORK_DIR/source.zip" "$WORK_DIR/$OUT_NAME" $EXTRA_FLAG
+          rm -f "$WORK_DIR/source.zip"
+          ls -lh "$WORK_DIR/$OUT_NAME"
 
           if [ -z "$RCLONE_CONFIG_DATA" ]; then
             echo "::warning::Secret RCLONE_CONFIG belum diatur; melewati langkah upload ke Google Drive."
-            rm -rf /mnt/tmp-rp
+            rm -rf "$WORK_DIR"
             exit 0
           fi
 
@@ -92,6 +105,7 @@ jobs:
           mkdir -p ~/.config/rclone
           printf "%s\n" "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
           sudo apt-get update -qq && sudo apt-get install -y -qq rclone
-          rclone copy "/mnt/tmp-rp/$OUT_NAME" "gdrive:$GDRIVE_DIR" --progress --stats=10s
-          rm -rf /mnt/tmp-rp ~/.config/rclone/rclone.conf
+          rclone copy "$WORK_DIR/$OUT_NAME" "gdrive:$GDRIVE_DIR" --progress --stats=10s
+          rm -rf "$WORK_DIR" ~/.config/rclone/rclone.conf
           echo "Selesai! File $OUT_NAME sudah tersimpan di Google Drive folder '$GDRIVE_DIR'."
+

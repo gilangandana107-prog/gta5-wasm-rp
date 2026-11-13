@@ -1,0 +1,103 @@
+name: Cross-Platform Cloud Build (Server, PC, macOS, iOS, Android)
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # 1. Jalankan semua test + build Dedicated RP Server & Wasm Patcher di Linux Cloud
+  linux-server-and-tests:
+    name: Test & Build Linux Server + Android Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain + Android ARM64 Target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Cargo Registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Unit Tests (Protocol, Wasm Patcher, JavaScript Boa Engine)
+        run: cargo test --workspace
+
+      - name: Build Release Linux Dedicated Server & Wasm Patcher
+        run: cargo build --release -p rp-server -p rp-wasm-patcher
+
+      - name: Build Cross-Platform Client Core for Android ARM64
+        run: cargo build --release -p rp-client-core --target aarch64-linux-android
+
+      - name: Upload Linux Server & Android Core Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rp-linux-server-and-android-core
+          path: |
+            target/release/rp-server
+            target/release/rp-wasm-patcher
+            target/aarch64-linux-android/release/librp_client_core.rlib
+            resources/
+
+  # 2. Build Windows PC Binaries di Cloud Windows
+  windows-pc:
+    name: Build Windows PC Server & Client Core
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Release Windows Binaries
+        run: cargo build --release --workspace
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rp-windows-x64
+          path: |
+            target/release/rp-server.exe
+            target/release/rp-wasm-patcher.exe
+            resources/
+
+  # 3. Build macOS Apple Silicon + iOS ARM64 Library di Cloud Mac GitHub (0% Beban di Mac Lokal!)
+  apple-macos-and-ios:
+    name: Build macOS & iOS ARM64 Core
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain + iOS ARM64 Target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Cache Cargo Registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Release macOS Binaries
+        run: cargo build --release -p rp-server -p rp-wasm-patcher
+
+      - name: Build Cross-Platform Client Core for iOS (aarch64-apple-ios)
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        run: cargo build --release -p rp-client-core --target aarch64-apple-ios
+
+      - name: Upload Apple Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rp-apple-macos-and-ios-core
+          path: |
+            target/release/rp-server
+            target/release/rp-wasm-patcher
+            target/aarch64-apple-ios/release/librp_client_core.rlib
+            resources/

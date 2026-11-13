@@ -1,0 +1,62 @@
+name: Cloud Wasm Inspector & iOS Patcher Utility
+
+# Workflow manual 1-klik di GitHub supaya Mac lokal tidak perlu kerja berat memproses Wasm besar!
+# Untuk menjaga repo tetap 100% legal & bebas aset berhak cipta, URL game.wasm pribadi diambil
+# hanya lewat GitHub Secret `PRIVATE_GAME_WASM_URL` di RAM sementara runner lalu langsung dihapus.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Pilih aksi cloud (inspect = cek daftar fungsi RAGE C++, patch = suntik hook RP)"
+        required: true
+        default: "inspect"
+        type: choice
+        options:
+          - inspect
+          - patch
+
+jobs:
+  cloud-wasm-worker:
+    name: Run Wasm Tool in GitHub macOS Cloud
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build rp-wasm-patcher
+        run: cargo build --release -p rp-wasm-patcher
+
+      - name: Process User-Provided Wasm in Temporary RAM
+        env:
+          WASM_URL: ${{ secrets.PRIVATE_GAME_WASM_URL }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          if [ -z "$WASM_URL" ]; then
+            echo "INFO: Secret PRIVATE_GAME_WASM_URL belum diatur di Settings -> Secrets -> Actions."
+            echo "Menjalankan demo help rp-wasm-patcher sebagai verifikasi cloud:"
+            ./target/release/rp-wasm-patcher
+            exit 0
+          fi
+
+          mkdir -p /tmp/rp-work
+          curl -fL "$WASM_URL" -o /tmp/rp-work/input.wasm
+
+          if [ "$MODE" = "inspect" ]; then
+            ./target/release/rp-wasm-patcher --inspect /tmp/rp-work/input.wasm --dump-all > wasm_rage_symbols.txt
+            head -n 40 wasm_rage_symbols.txt
+          else
+            ./target/release/rp-wasm-patcher --patch /tmp/rp-work/input.wasm /tmp/rp-work/patched_rp.wasm
+          fi
+          rm -f /tmp/rp-work/input.wasm
+
+      - name: Upload Symbol Report (Clean Text Metadata Only)
+        if: inputs.mode == 'inspect' && hashFiles('wasm_rage_symbols.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: rage-cpp-commands-report
+          path: wasm_rage_symbols.txt

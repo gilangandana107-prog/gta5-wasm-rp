@@ -1,0 +1,8 @@
+{
+  "name": "roleplay-core",
+  "version": "0.1.0",
+  "author": "IndoCross RP Team",
+  "server_scripts": [
+    "server.js"
+  ]
+}

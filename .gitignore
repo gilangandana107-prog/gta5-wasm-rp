@@ -1,0 +1,25 @@
+# Rust build artifacts (biar gak ke-upload dan gak menuhin repo)
+/target/
+**/*.rs.bk
+
+# macOS / Xcode / Android / OS files
+.DS_Store
+build/
+*.xcodeproj/
+*.xcworkspace/
+*.ipa
+*.apk
+*.app/
+*.dSYM/
+
+# WAJIB DILARANG: File game berhak cipta / aset GTA V tidak boleh masuk Git!
+*.wasm
+*.cwasm
+*.zip
+*.rpf
+*.ysc
+*.ydr
+*.ytd
+game-assets/
+data/
+b/

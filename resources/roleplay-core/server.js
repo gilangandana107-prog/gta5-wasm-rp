@@ -178,3 +178,4 @@ RegisterCommand("cuaca", (source, args) => {
     SetWorldWeather(-1, w);
     SendChatMessage(-1, "[BMKG]", `Cuaca kota berubah menjadi ${w}.`, [135, 206, 250]);
 });
+

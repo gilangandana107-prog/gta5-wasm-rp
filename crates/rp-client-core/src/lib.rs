@@ -421,3 +421,4 @@ impl RpClientCore {
         self.streaming_jobs = remaining_jobs;
     }
 }
+

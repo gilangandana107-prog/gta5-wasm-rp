@@ -1,0 +1,13 @@
+[package]
+name = "rp-lite-trimmer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Streaming ZIP64 Sandbox/Roleplay Asset Trimmer (shrinks ~20 GB Wasm archive to ~10-11 GB)"
+
+[dependencies]
+anyhow.workspace = true
+rp-wasm-patcher = { path = "../rp-wasm-patcher" }
+serde.workspace = true
+serde_json.workspace = true
+zip.workspace = true

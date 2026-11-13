@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/rp-proto",
     "crates/rp-wasm-patcher",
+    "crates/rp-lite-trimmer",
     "crates/rp-js-runtime",
     "crates/rp-server",
     "crates/rp-client-core",
@@ -20,8 +21,10 @@ serde_json = "1"
 boa_engine = "0.20"
 wasmparser = "0.258.3"
 wasm-encoder = { version = "0.258.3", features = ["wasmparser"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+

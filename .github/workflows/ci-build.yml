@@ -28,8 +28,8 @@ jobs:
       - name: Run Unit Tests (Protocol, Wasm Patcher, JavaScript Boa Engine)
         run: cargo test --workspace
 
-      - name: Build Release Linux Dedicated Server & Wasm Patcher
-        run: cargo build --release -p rp-server -p rp-wasm-patcher
+      - name: Build Release Linux Dedicated Server, Wasm Patcher & Lite Trimmer
+        run: cargo build --release -p rp-server -p rp-wasm-patcher -p rp-lite-trimmer
 
       - name: Build Cross-Platform Client Core for Android ARM64
         run: cargo build --release -p rp-client-core --target aarch64-linux-android
@@ -41,6 +41,7 @@ jobs:
           path: |
             target/release/rp-server
             target/release/rp-wasm-patcher
+            target/release/rp-lite-trimmer
             target/aarch64-linux-android/release/librp_client_core.rlib
             resources/
 
@@ -101,3 +102,4 @@ jobs:
             target/release/rp-wasm-patcher
             target/aarch64-apple-ios/release/librp_client_core.rlib
             resources/
+

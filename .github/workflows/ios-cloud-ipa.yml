@@ -60,3 +60,4 @@ jobs:
         with:
           name: rage-cpp-commands-report
           path: wasm_rage_symbols.txt
+

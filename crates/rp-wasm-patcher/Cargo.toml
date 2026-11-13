@@ -9,3 +9,4 @@ description = "Clean-room WebAssembly symbol inspector & RAGE command exporter f
 anyhow.workspace = true
 wasmparser.workspace = true
 wasm-encoder.workspace = true
+

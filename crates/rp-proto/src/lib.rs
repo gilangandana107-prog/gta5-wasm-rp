@@ -304,3 +304,4 @@ mod tests {
         assert_eq!(state, decoded);
     }
 }
+

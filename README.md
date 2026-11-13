@@ -36,7 +36,8 @@ Kerangka kerja *clean-room* open-source ala **FiveM** untuk menjalankan server &
 | Folder / Crate | Deskripsi |
 | :--- | :--- |
 | `crates/rp-proto` | Protokol jaringan biner 30Hz ultra-ringan (`PlayerSyncState` 81 byte) + kanal *Reliable UDP* untuk RPC, Chat, NetEvent, dan HUD. |
-| `crates/rp-wasm-patcher` | Alat inspeksi simbol C++ dan *auto-patcher* `game.wasm` tanpa perlu *reverse engineering* heksadesimal manual. |
+| `crates/rp-wasm-patcher` | Alat inspeksi simbol C++ dan *auto-patcher* `game.wasm` (termasuk stub `CMovieMgr::PreloadMovie`) tanpa *reverse engineering* heksadesimal manual. |
+| `crates/rp-lite-trimmer` | Pemangkas *streaming* ZIP64 yang menyusutkan arsip ~20 GB menjadi paket **Sandbox/RP Lite (~10–11 GB)** serta menyinkronkan `data/manifest.json` & `dlcList.xml`. |
 | `crates/rp-js-runtime` | Mesin *scripting* **JavaScript (Boa ES2023+)** murni Rust untuk membuat fitur Roleplay di sisi server. |
 | `crates/rp-server` | Dedicated server lintas platform dengan *Spatial Culling* (hemat baterai & RAM HP) serta pemuat otomatis `fxmanifest.json`. |
 | `crates/rp-client-core` | Pustaka client bebas-OS (`aarch64-apple-ios`, `aarch64-linux-android`, Windows, macOS, Linux) untuk antrean RPC, *streaming* kendaraan/animasi, dan *NPC Traffic Disabler*. |

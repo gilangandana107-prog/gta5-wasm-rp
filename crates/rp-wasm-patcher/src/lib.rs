@@ -12,6 +12,7 @@ use wasmparser::{KnownCustom, Name, Parser, Payload, TypeRef};
 
 pub const HOOK_IMPORT_MODULE: &str = "env";
 pub const HOOK_SCRIPT_TICK: &str = "rp_script_tick";
+const MOVIE_PRELOAD_SYMBOL: &str = "CMovieMgr::PreloadMovie(char const*, bool)";
 
 /// Core & Roleplay RAGE script commands automatically exported as `mp:<ShortName>`.
 /// Because `game.wasm` preserves C++ function names, no hex memory offset reverse-engineering is required!
@@ -161,6 +162,7 @@ struct RpPatcher {
     types_count: u32,
     tls_global: u32,
     script_update_func: u32,
+    movie_preload_func: Option<u32>,
     exports_to_add: Vec<(String, u32)>,
     next_func_idx: u32,
 }
@@ -217,6 +219,19 @@ impl Reencode for RpPatcher {
     ) -> Result<(), Error<Self::Error>> {
         let current_orig_idx = self.next_func_idx;
         self.next_func_idx += 1;
+
+        // Stub out `CMovieMgr::PreloadMovie` -> `return 0` so stripped `.bik` videos never hang
+        if Some(current_orig_idx) == self.movie_preload_func {
+            use wasm_encoder::Instruction as I;
+            let mut f = self.new_function_with_parsed_locals(&func)?;
+            f.instruction(&I::I32Const(0)).instruction(&I::Return);
+            let mut reader = func.get_operators_reader()?;
+            while !reader.eof() {
+                f.instruction(&self.parse_instruction(&mut reader)?);
+            }
+            code.function(&f);
+            return Ok(());
+        }
 
         if current_orig_idx != self.script_update_func {
             return utils::parse_function_body(self, code, func);
@@ -306,6 +321,7 @@ pub fn patch_game_wasm(wasm: &[u8], extra_commands: &[(&str, &str)]) -> Result<V
         types_count,
         tls_global: tls_global.unwrap_or(0),
         script_update_func,
+        movie_preload_func: by_name.get(MOVIE_PRELOAD_SYMBOL).copied(),
         exports_to_add,
         next_func_idx: imported_funcs,
     };
@@ -396,3 +412,4 @@ mod tests {
         assert!(has_mp_export, "mp:PlayerPedId should be exported");
     }
 }
+

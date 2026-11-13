@@ -8,3 +8,4 @@ description = "Cross-platform UDP sync & Roleplay RPC protocol for iOS, Android,
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+

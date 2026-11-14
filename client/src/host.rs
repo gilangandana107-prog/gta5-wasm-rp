@@ -321,7 +321,7 @@ fn pool_grow(size: u64) -> bool {
             if cfg!(target_os = "ios") {
                 let budget = IOS_MEM_BUDGET.load(Ordering::SeqCst);
                 if budget > 0 && budget < (4 << 30) {
-                    1024 << 20
+                    1536 << 20
                 } else if budget > 0 && budget < (5600 << 20) {
                     2200 << 20
                 } else {

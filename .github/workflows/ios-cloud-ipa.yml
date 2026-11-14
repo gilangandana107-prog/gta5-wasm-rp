@@ -6,7 +6,7 @@ on:
       optimize_wasm:
         description: "Jalankan wasm-opt -O3 (lebih kencang FPS di iPhone, waktu build +4 menit)"
         required: false
-        default: false
+        default: true
         type: boolean
 
 env:

@@ -222,6 +222,8 @@ pub fn call(mut caller: Caller<'_, HostState>, idx: usize, params: &[Val], resul
             let line = read_cstr(mem, int(params, 0) as u64);
             if let Some(at) = line.find("Fatal Error: ") {
                 FATAL.lock().unwrap().get_or_insert_with(|| line[at + 13..].to_string());
+            } else if let Some(at) = line.find("Error: ") {
+                *FATAL.lock().unwrap() = Some(line[at + 7..].to_string());
             }
             eprintln!("[eng] {line}");
         }

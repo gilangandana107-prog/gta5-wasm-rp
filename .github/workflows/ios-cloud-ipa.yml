@@ -87,6 +87,8 @@ jobs:
           echo "Fetching user's private Wasm module (${WASM_REL}) into ephemeral RAM..."
           curl -fsSL -H "X-RP-Sync-Token: ${RP_SYNC_TOKEN}" "${SYNC_BASE}/files/${WASM_REL}" -o /tmp/input_game.wasm
 
+          python3 -c 'import re; wasm = open("/tmp/input_game.wasm", "rb").read(); raw = [m.decode("ascii", "ignore").replace("\\", "/").replace("platform:", "x64").replace("common:", "common").lstrip("/") for m in re.findall(rb"[A-Za-z0-9_./:\\-]{3,120}\.rpf", wasm)]; found = {s.replace("//", "/") for s in raw if s.startswith(("x64/", "common/", "dlcpacks/", "levels/", "sfx/", "anim/", "audio/")) and "%" not in s}; found |= {"x64/" + s for s in list(found) if s.startswith(("sfx/", "audio/", "anim/", "levels/"))}; print(f"[wasm-scan] discovered {len(found)} .rpf path literals in game.wasm"); io_rs = open("client/src/io.rs").read(); extra = "\n".join(f"    \"{p}\"," for p in sorted(found) if f"\"{p}\"" not in io_rs); open("client/src/io.rs", "w").write(io_rs.replace("const VIRTUAL_STUB_RPFS: &[&str] = &[", "const VIRTUAL_STUB_RPFS: &[&str] = &[\n" + extra, 1)) if extra else None'
+
           cd client
           ./make-ios.sh /tmp/input_game.wasm --ipa
           rm -f /tmp/input_game.wasm

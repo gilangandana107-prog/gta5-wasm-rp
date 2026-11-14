@@ -1,6 +1,8 @@
 # muguet - Cargo.toml
 # Constantin Clerc (c22dev) - 0.1
 
+[workspace]
+
 [package]
 name = "muguet"
 version = "0.1.0"

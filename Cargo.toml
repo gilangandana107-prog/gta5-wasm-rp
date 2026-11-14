@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["client"]
 members = [
     "crates/rp-proto",
     "crates/rp-wasm-patcher",

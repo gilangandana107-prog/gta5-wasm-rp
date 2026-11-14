@@ -1,0 +1,14 @@
+[package]
+name = "rp-ios-aot"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+description = "Cross-platform Cranelift AOT precompiler: patches game.wasm with 9 runtime/RAM hooks + 206 MP/RP exports and cross-compiles game.cwasm for stock non-JIT iOS (aarch64-apple-ios)"
+
+[dependencies]
+anyhow.workspace = true
+rp-proto = { path = "../rp-proto" }
+wasmparser.workspace = true
+wasm-encoder.workspace = true
+wasmtime = { version = "49", default-features = false, features = ["runtime", "threads", "profiling", "anyhow", "cranelift", "parallel-compilation", "all-arch"] }
+

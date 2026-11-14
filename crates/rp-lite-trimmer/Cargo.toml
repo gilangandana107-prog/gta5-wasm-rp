@@ -7,7 +7,6 @@ description = "Streaming ZIP64 Sandbox/Roleplay Asset Trimmer (shrinks ~20 GB Wa
 
 [dependencies]
 anyhow.workspace = true
-rp-wasm-patcher = { path = "../rp-wasm-patcher" }
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true

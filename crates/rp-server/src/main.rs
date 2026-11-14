@@ -1,4 +1,10 @@
-//! Dedicated Authoritative Roleplay Server for iOS, Android, and PC clients.
+//! Dedicated Authoritative Roleplay Server for iOS, Android, macOS, and PC clients.
+//!
+//! Unifies 100% 3D GTA V entity/vehicle/clothing/mod/combat sync (`MAGIC = 0x47`, packets `1..=23`)
+//! with OneSync 300m spatial culling and an embedded JavaScript (`boa_engine`) Roleplay runtime
+//! over `PKT_RP_REL` (`28`) / `PKT_RP_ACK` (`29`).
+
+mod sync_http;
 
 use anyhow::Result;
 use rp_js_runtime::{JsRoleplayEngine, PlayerScriptView, ScriptEffect};
@@ -10,7 +16,7 @@ use std::time::{Duration, Instant};
 
 const MAX_PLAYERS_DEFAULT: usize = 64;
 /// OneSync-style spatial culling radius: only relay 30Hz state updates to nearby players
-/// to dramatically reduce RAM, CPU, and mobile data usage on iOS & Android devices.
+/// to dramatically reduce RAM, CPU, and mobile data usage on iPhone 15 & Android devices.
 const SPATIAL_CULL_RADIUS: f32 = 300.0;
 const REL_RESEND_INTERVAL: Duration = Duration::from_millis(180);
 const REL_MAX_LIFETIME: Duration = Duration::from_secs(5);
@@ -49,7 +55,7 @@ struct RpServer {
 impl RpServer {
     fn new(port: u16, max_players: usize, resources_dir: &Path) -> Result<Self> {
         let sock = UdpSocket::bind(("0.0.0.0", port))?;
-        sock.set_read_timeout(Some(Duration::from_millis(50)))?;
+        sock.set_read_timeout(Some(Duration::from_millis(40)))?;
 
         let mut js = JsRoleplayEngine::new()?;
         if resources_dir.is_dir() {
@@ -93,17 +99,25 @@ impl RpServer {
         let mut last_sweep = Instant::now();
 
         loop {
-            if let Ok((n, from)) = self.sock.recv_from(&mut buf) {
-                if let Some((kind, payload)) = parse_packet(&buf[..n]) {
-                    self.handle_packet(from, kind, payload);
+            match self.sock.recv_from(&mut buf) {
+                Ok((n, from)) => {
+                    if let Some((kind, payload)) = parse_packet(&buf[..n]) {
+                        self.handle_packet(from, kind, payload);
+                    }
                 }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(e) => eprintln!("[rp-server] recv error: {e}"),
             }
 
             self.tick_reliable_resends();
 
             if last_sweep.elapsed() >= Duration::from_secs(2) {
                 last_sweep = Instant::now();
-                self.sweep_timeouts();
+                self.sweep_timeouts_and_broadcast_names();
             }
         }
     }
@@ -113,7 +127,7 @@ impl RpServer {
             id: p.id,
             name: p.name.clone(),
             platform: p.platform,
-            pos: p.state.pos,
+            pos: p.state.effective_pos(),
             cash: p.cash,
             bank: p.bank,
             job: p.job.clone(),
@@ -123,73 +137,82 @@ impl RpServer {
 
     fn handle_packet(&mut self, from: SocketAddr, kind: u8, payload: &[u8]) {
         match kind {
+            PKT_PING => {
+                let status = serde_json::json!({
+                    "server": self.server_name,
+                    "online": self.players.len(),
+                    "max": self.max_players,
+                    "protocol": "gta5-wasm-rp-v1",
+                });
+                let bytes = serde_json::to_vec(&status).unwrap_or_default();
+                let _ = self.sock.send_to(&make_packet(PKT_PONG, &bytes), from);
+            }
             PKT_HELLO => self.handle_hello(from, payload),
             PKT_BYE => self.disconnect_player(from, "keluar"),
-            PKT_STATE => {
-                if payload.len() >= 4 + SYNC_STATE_SIZE {
-                    let Some(decoded) = PlayerSyncState::decode(&payload[4..]) else {
-                        return;
-                    };
-                    let sender_id = if let Some(p) = self.players.get_mut(&from) {
-                        p.last_seen = Instant::now();
-                        p.state = decoded;
-                        p.id
-                    } else {
-                        let _ = self.sock.send_to(&make_packet(PKT_LEAVE, &[0]), from);
-                        return;
-                    };
-
-                    // Spatial Culling (OneSync): only forward 30Hz state to players within 300m!
-                    let mut relay_body = Vec::with_capacity(1 + payload.len());
-                    relay_body.push(sender_id);
-                    relay_body.extend_from_slice(payload);
-                    let pkt = make_packet(PKT_STATE, &relay_body);
-
-                    for (addr, other) in &self.players {
-                        if *addr != from && other.state.distance_to(decoded.pos) <= SPATIAL_CULL_RADIUS
-                        {
-                            let _ = self.sock.send_to(&pkt, addr);
-                        }
-                    }
+            PKT_RP_ACK if payload.len() >= 2 => {
+                if let Some(p) = self.players.get_mut(&from) {
+                    p.last_seen = Instant::now();
                 }
-            }
-            PKT_VOICE | PKT_SHOT => {
-                let Some(sender) = self.players.get_mut(&from) else {
-                    return;
-                };
-                sender.last_seen = Instant::now();
-                let sender_id = sender.id;
-                let sender_pos = sender.state.pos;
-                let max_dist = if kind == PKT_VOICE { 35.0 } else { SPATIAL_CULL_RADIUS };
-
-                let mut out = Vec::with_capacity(1 + payload.len());
-                out.push(sender_id);
-                out.extend_from_slice(payload);
-                let pkt = make_packet(kind, &out);
-
-                for (addr, other) in &self.players {
-                    if *addr != from && other.state.distance_to(sender_pos) <= max_dist {
-                        let _ = self.sock.send_to(&pkt, addr);
-                    }
-                }
-            }
-            PKT_ACK if payload.len() >= 2 => {
                 let seq = u16::from_le_bytes([payload[0], payload[1]]);
                 self.pending_rels
                     .retain(|p| !(p.target_addr == from && p.seq == seq));
             }
-            PKT_REL if payload.len() >= 3 => {
+            PKT_RP_REL if payload.len() >= 3 => {
                 let seq = u16::from_le_bytes([payload[0], payload[1]]);
                 let inner_kind = payload[2];
                 let inner_body = &payload[3..];
                 let _ = self
                     .sock
-                    .send_to(&make_packet(PKT_ACK, &[payload[0], payload[1]]), from);
+                    .send_to(&make_packet(PKT_RP_ACK, &[payload[0], payload[1]]), from);
 
                 let Some(player_id) = self.accept_reliable_seq(from, seq) else {
                     return;
                 };
                 self.handle_reliable_inner(player_id, inner_kind, inner_body);
+            }
+            k if is_relayed_mp_packet(k) => {
+                let (sender_id, sender_pos) = if let Some(p) = self.players.get_mut(&from) {
+                    p.last_seen = Instant::now();
+                    if k == PKT_STATE && payload.len() >= 4 + SYNC_STATE_SIZE {
+                        let Some(decoded) = PlayerSyncState::decode(&payload[4..]) else {
+                            return;
+                        };
+                        p.state = decoded;
+                    }
+                    (p.id, p.state.effective_pos())
+                } else {
+                    let _ = self.sock.send_to(&make_packet(PKT_LEAVE, &[0]), from);
+                    return;
+                };
+
+                let mut out = Vec::with_capacity(1 + payload.len());
+                out.push(sender_id);
+                out.extend_from_slice(payload);
+                let pkt = make_packet(k, &out);
+
+                if k == PKT_VOICE {
+                    for (addr, other) in &self.players {
+                        if *addr != from && other.state.distance_to(sender_pos) <= 35.0 {
+                            let _ = self.sock.send_to(&pkt, addr);
+                        }
+                    }
+                } else if is_spatially_culled_packet(k) {
+                    // OneSync 300m spatial culling for high-frequency 30Hz state/population/shot packets
+                    for (addr, other) in &self.players {
+                        if *addr != from
+                            && other.state.distance_to(sender_pos) <= SPATIAL_CULL_RADIUS
+                        {
+                            let _ = self.sock.send_to(&pkt, addr);
+                        }
+                    }
+                } else {
+                    // Session-wide relay for clothing/vehicle mods/P2P reliable events/time/killfeed
+                    for addr in self.players.keys() {
+                        if *addr != from {
+                            let _ = self.sock.send_to(&pkt, addr);
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -236,7 +259,7 @@ impl RpServer {
             name: clean.clone(),
             platform: hello.platform,
             state: PlayerSyncState {
-                pos: [-1037.0, -2737.0, 20.17], // LSIA Airport default spawn
+                pos: [215.8, -810.1, 30.73], // Legion Square default Roleplay spawn
                 ..Default::default()
             },
             cash: 0,
@@ -247,10 +270,24 @@ impl RpServer {
         };
 
         println!(
-            "[rp-server] {} ({:?}) joined as ID {} from {}",
-            clean, hello.platform, id, from
+            "[rp-server] {} ({:?}) joined as ID {} from {} ({} online)",
+            clean,
+            hello.platform,
+            id,
+            from,
+            self.players.len() + 1
         );
         let _ = self.sock.send_to(&make_packet(PKT_WELCOME, &[id]), from);
+
+        // Exchange 3D nametag packets with all existing peers
+        let new_name_pkt = make_name_packet(id, &clean);
+        for (other_addr, other) in &self.players {
+            let _ = self
+                .sock
+                .send_to(&make_name_packet(other.id, &other.name), from);
+            let _ = self.sock.send_to(&new_name_pkt, other_addr);
+        }
+
         self.players.insert(from, new_player);
 
         self.sync_js_snapshot();
@@ -287,7 +324,9 @@ impl RpServer {
                                 REL_CHAT_MSG,
                                 &serde_json::to_vec(&ChatMessage {
                                     prefix: "[SISTEM]".to_string(),
-                                    text: format!("Perintah /{cmd} tidak ditemukan."),
+                                    text: format!(
+                                        "Perintah /{cmd} tidak ditemukan. Ketik /bantuan."
+                                    ),
                                     color_rgb: [255, 90, 90],
                                 })
                                 .unwrap_or_default(),
@@ -349,6 +388,17 @@ impl RpServer {
                     }
                 }
                 ScriptEffect::SendRpc { target_id, rpc } => {
+                    // Keep server-side coordinates in sync immediately when Teleport is issued
+                    if let ServerRpc::Teleport { pos, .. } = &rpc {
+                        if target_id >= 0 {
+                            if let Some(p) =
+                                self.players.values_mut().find(|p| p.id == target_id as u8)
+                            {
+                                p.state.pos = *pos;
+                                p.state.veh_pos = *pos;
+                            }
+                        }
+                    }
                     if let Ok(bytes) = serde_json::to_vec(&rpc) {
                         self.route_reliable(target_id, REL_SERVER_RPC, &bytes);
                     }
@@ -363,7 +413,10 @@ impl RpServer {
                     radius,
                     msg,
                 } => {
-                    if let Some(origin) = self.find_player_by_id(source_id).map(|p| p.state.pos) {
+                    if let Some(origin) = self
+                        .find_player_by_id(source_id)
+                        .map(|p| p.state.effective_pos())
+                    {
                         let bytes = serde_json::to_vec(&msg).unwrap_or_default();
                         let targets: Vec<u8> = self
                             .players
@@ -411,7 +464,7 @@ impl RpServer {
         body.extend(seq.to_le_bytes());
         body.push(inner_kind);
         body.extend_from_slice(payload);
-        let packet = make_packet(PKT_REL, &body);
+        let packet = make_packet(PKT_RP_REL, &body);
 
         let _ = self.sock.send_to(&packet, addr);
         let now = Instant::now();
@@ -472,8 +525,11 @@ impl RpServer {
     fn disconnect_player(&mut self, addr: SocketAddr, reason: &str) {
         if let Some(removed) = self.players.remove(&addr) {
             println!(
-                "[rp-server] {} (ID {}) disconnected: {}",
-                removed.name, removed.id, reason
+                "[rp-server] {} (ID {}) disconnected: {} ({} online)",
+                removed.name,
+                removed.id,
+                reason,
+                self.players.len()
             );
             for other_addr in self.players.keys() {
                 let _ = self
@@ -493,7 +549,7 @@ impl RpServer {
         }
     }
 
-    fn sweep_timeouts(&mut self) {
+    fn sweep_timeouts_and_broadcast_names(&mut self) {
         let timed_out: Vec<SocketAddr> = self
             .players
             .iter()
@@ -503,6 +559,14 @@ impl RpServer {
         for addr in timed_out {
             self.disconnect_player(addr, "timeout");
         }
+
+        // Periodically refresh peer nametags for UDP loss resilience
+        for (addr, p) in &self.players {
+            let pkt = make_name_packet(p.id, &p.name);
+            for to in self.players.keys().filter(|a| *a != addr) {
+                let _ = self.sock.send_to(&pkt, to);
+            }
+        }
     }
 }
 
@@ -511,9 +575,10 @@ fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(DEFAULT_PORT);
-    let resources_path = std::env::var("RP_RESOURCES").unwrap_or_else(|_| "resources".to_string());
+    let resources_path =
+        std::env::var("RP_RESOURCES").unwrap_or_else(|_| "resources".to_string());
+    sync_http::spawn_if_configured()?;
     let mut server = RpServer::new(port, MAX_PLAYERS_DEFAULT, Path::new(&resources_path))?;
     server.run();
     Ok(())
 }
-

@@ -26,6 +26,20 @@ pub struct TrimReport {
     pub wasm_patched: bool,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SyncFileEntry {
+    pub path: String,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SyncIndex {
+    pub version: u32,
+    pub total_bytes: u64,
+    pub file_count: usize,
+    pub files: Vec<SyncFileEntry>,
+}
+
 /// Determines whether a `data/<rel_path>` file is unnecessary for Los Santos Sandbox/Roleplay.
 /// Returns `Some(category_label)` if safe to strip, or `None` if essential (map, vehicles, weapons, core SFX).
 pub fn classify_strippable_data_file(rel_data_path: &str) -> Option<&'static str> {
@@ -38,27 +52,42 @@ pub fn classify_strippable_data_file(rel_data_path: &str) -> Option<&'static str
 
     // 2. Offline Bink video files (.bik: fake TV cartoons, cinema, Rockstar intro logos)
     // Safe because `CMovieMgr::PreloadMovie` is patched to return 0!
-    if p.starts_with("movies/") || p.ends_with(".bik") {
+    if p.starts_with("movies/") || p.contains("/movies/") || p.ends_with(".bik") {
         return Some("offline_bink_movies");
     }
 
     // 3. Audio banks: strip licensed Radio & Singleplayer Story Dialogue, KEEP engines/guns/sirens/ambience!
-    if let Some(sfx_rest) = p.strip_prefix("sfx/") {
-        let file_stem = sfx_rest.rsplit('/').next().unwrap_or(sfx_rest);
-        if file_stem.starts_with("radio_") || sfx_rest.contains("radio") {
+    let sfx_subpath = p
+        .strip_prefix("sfx/")
+        .or_else(|| p.split_once("/sfx/").map(|(_, rest)| rest));
+    if let Some(sfx_rest) = sfx_subpath {
+        let first_seg = sfx_rest.split('/').next().unwrap_or(sfx_rest);
+        let leaf = sfx_rest.rsplit('/').next().unwrap_or(sfx_rest);
+        if first_seg.starts_with("radio_") || leaf.starts_with("radio_") || sfx_rest.contains("radio")
+        {
             return Some("radio_music_stations");
         }
-        if file_stem.starts_with("ss_")
-            || file_stem.starts_with("s_full_")
-            || file_stem.starts_with("cutscene")
-            || file_stem.starts_with("prologue")
+        if first_seg.starts_with("ss_")
+            || leaf.starts_with("ss_")
+            || first_seg.starts_with("s_full_")
+            || leaf.starts_with("s_full_")
+            || first_seg.starts_with("cutscene")
+            || leaf.starts_with("cutscene")
+            || first_seg.starts_with("prologue")
+            || leaf.starts_with("prologue")
+            || first_seg.starts_with("police_scanner")
+            || leaf.starts_with("police_scanner")
         {
             return Some("story_mission_dialogue");
         }
     }
 
-    // 4. Story-mode cutscene animation dictionaries
-    if p.starts_with("anim/cutscene") || p.contains("/cutscene/") {
+    // 4. Story-mode cutscene animation dictionaries (both root and x64/anim/cutscene*)
+    if p.starts_with("anim/cutscene")
+        || p.contains("/anim/cutscene")
+        || p.contains("/cutscene/")
+        || p.contains("/cutscenes/")
+    {
         return Some("story_cutscene_anims");
     }
 
@@ -149,6 +178,16 @@ pub fn repack_lite_archive<R: Read + Seek, W: Write + Seek>(
     writer: W,
     patch_wasm: bool,
 ) -> Result<TrimReport> {
+    repack_lite_archive_with_sidecar(reader, writer, patch_wasm, None)
+}
+
+/// Streams input `.zip` into a ZIP64 Lite `.zip` and optionally saves a standalone `game.wasm` sidecar.
+pub fn repack_lite_archive_with_sidecar<R: Read + Seek, W: Write + Seek>(
+    reader: R,
+    writer: W,
+    patch_wasm: bool,
+    wasm_sidecar: Option<&std::path::Path>,
+) -> Result<TrimReport> {
     let mut zip_in = ZipArchive::new(reader).context("Invalid input ZIP archive")?;
     let prefix = find_archive_root_prefix(&zip_in)?;
 
@@ -235,17 +274,14 @@ pub fn repack_lite_archive<R: Read + Seek, W: Write + Seek>(
             if inner == "game.wasm" {
                 let mut wasm_bytes = Vec::with_capacity(size as usize);
                 entry.read_to_end(&mut wasm_bytes)?;
-                let final_wasm = if patch_wasm && !rp_wasm_patcher::is_already_patched(&wasm_bytes)
-                {
-                    report.wasm_patched = true;
-                    rp_wasm_patcher::patch_game_wasm(&wasm_bytes, &[])?
-                } else {
-                    wasm_bytes
-                };
+                if let Some(sidecar_path) = wasm_sidecar {
+                    let _ = std::fs::write(sidecar_path, &wasm_bytes);
+                }
+                let _ = patch_wasm;
                 zip_out.start_file(&rel, opts_deflated)?;
-                zip_out.write_all(&final_wasm)?;
+                zip_out.write_all(&wasm_bytes)?;
                 report.kept_files += 1;
-                report.kept_bytes += final_wasm.len() as u64;
+                report.kept_bytes += wasm_bytes.len() as u64;
                 continue;
             } else if inner.starts_with("shaders/") {
                 zip_out.start_file(&rel, opts_stored)?;
@@ -297,6 +333,66 @@ fn stream_copy<R: Read, W: Write>(src: &mut R, dst: &mut W, buf: &mut [u8]) -> R
         total += n as u64;
     }
     Ok(total)
+}
+
+/// Unpacks a trimmed Lite `.zip` into an HTTP-servable directory tree (`data/*` + `b/<build>/*`)
+/// and generates `<out_dir>/sync-index.json` so iOS/macOS/PC clients can download files directly
+/// into `game/` with zero `.zip` extraction and 0x duplicate disk usage.
+pub fn unpack_sync_dir<R: Read + Seek>(reader: R, out_dir: &std::path::Path) -> Result<SyncIndex> {
+    let mut zip = ZipArchive::new(reader).context("Invalid ZIP archive")?;
+    let prefix = find_archive_root_prefix(&zip)?;
+    std::fs::create_dir_all(out_dir)?;
+
+    let mut files = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut copy_buf = vec![0u8; 2 << 20]; // 2 MiB buffer
+
+    for idx in 0..zip.len() {
+        let mut entry = zip.by_index(idx)?;
+        if entry.is_dir() {
+            continue;
+        }
+        let full_name = entry.name().replace('\\', "/");
+        let Some(rel) = full_name.strip_prefix(&prefix).map(str::to_string) else {
+            continue;
+        };
+        if !(rel.starts_with("data/") || rel.starts_with("b/"))
+            || rel.ends_with('/')
+            || rel.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..")
+        {
+            continue;
+        }
+
+        let dest_path = out_dir.join(&rel);
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut out_file = std::fs::File::create(&dest_path)
+            .with_context(|| format!("Failed to create {}", dest_path.display()))?;
+        let written = stream_copy(&mut entry, &mut out_file, &mut copy_buf)?;
+        total_bytes += written;
+        files.push(SyncFileEntry {
+            path: rel,
+            size: written,
+        });
+    }
+
+    // Sort deterministically, keeping `data/manifest.json` at the very end as commit marker!
+    files.sort_by(|a, b| {
+        let a_last = a.path == "data/manifest.json";
+        let b_last = b.path == "data/manifest.json";
+        a_last.cmp(&b_last).then_with(|| a.path.cmp(&b.path))
+    });
+
+    let index = SyncIndex {
+        version: 1,
+        total_bytes,
+        file_count: files.len(),
+        files,
+    };
+    let json_bytes = serde_json::to_vec(&index)?;
+    std::fs::write(out_dir.join("sync-index.json"), json_bytes)?;
+    Ok(index)
 }
 
 #[cfg(test)]

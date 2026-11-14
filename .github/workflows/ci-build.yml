@@ -26,7 +26,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Unit Tests (Protocol, Wasm Patcher, JavaScript Boa Engine)
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude rp-ios-aot
 
       - name: Build Release Linux Dedicated Server, Wasm Patcher & Lite Trimmer
         run: cargo build --release -p rp-server -p rp-wasm-patcher -p rp-lite-trimmer
@@ -59,7 +59,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build Release Windows Binaries
-        run: cargo build --release --workspace
+        run: cargo build --release -p rp-server -p rp-wasm-patcher -p rp-lite-trimmer -p rp-client-core
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4

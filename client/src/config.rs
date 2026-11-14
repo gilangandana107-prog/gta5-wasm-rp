@@ -72,15 +72,26 @@ fn redirect_logs_if_detached() {
         fn dup2(old: i32, new: i32) -> i32;
     }
 
-    if cfg!(target_os = "ios") {
+    if unsafe { isatty(2) } != 0 {
         return;
     }
-    let in_bundle = std::env::current_exe().map(|p| p.to_string_lossy().contains(".app/Contents/MacOS/")).unwrap_or(false);
-    if !in_bundle || unsafe { isatty(2) } != 0 {
-        return;
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let path = PathBuf::from(home).join("Library/Logs/Muguet.log");
+    let path = if cfg!(target_os = "ios") {
+        let docs = support_dir();
+        let _ = std::fs::create_dir_all(&docs);
+        let cur = docs.join("indocross-boot.log");
+        let prev = docs.join("indocross-prev.log");
+        if cur.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+            let _ = std::fs::copy(&cur, &prev);
+        }
+        cur
+    } else {
+        let in_bundle = std::env::current_exe().map(|p| p.to_string_lossy().contains(".app/Contents/MacOS/")).unwrap_or(false);
+        if !in_bundle {
+            return;
+        }
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        PathBuf::from(home).join("Library/Logs/Muguet.log")
+    };
     if let Ok(f) = std::fs::File::create(&path) {
         use std::os::fd::IntoRawFd;
         let fd = f.into_raw_fd();
@@ -88,6 +99,7 @@ fn redirect_logs_if_detached() {
             dup2(fd, 2);
             dup2(fd, 1);
         }
+        eprintln!("[boot] IndoCross RP log started");
     }
 }
 
@@ -166,7 +178,12 @@ fn settings(cfg_path: &Path) -> Vec<String> {
     engine_args.push(format!("-frameLimit={}", if fps <= 0.0 { 0 } else if fps <= 30.0 { 2 } else { 1 }));
 
     let start_mode = std::env::var("MUGUET_START").ok().and_then(|v| v.parse::<f64>().ok()).or_else(|| num("start_mode")).unwrap_or(2.0) as i64;
-    let start_mode = if (1..=2).contains(&start_mode) { start_mode } else { 2 };
+    let mut start_mode = if (1..=2).contains(&start_mode) { start_mode } else { 2 };
+    let data_root = game_dir().join("data");
+    if start_mode == 1 && data_root.join("manifest.json").exists() && !data_root.join("x64/audio/sfx/prologue.rpf").exists() {
+        eprintln!("[config] Lite Roleplay city data detected (no prologue.rpf): switching start_mode 1 -> 2 (Los Santos Sandbox)");
+        start_mode = 2;
+    }
     if !std::env::args().any(|a| a.starts_with("-wasmstartchoice")) {
         engine_args.push(format!("-wasmstartchoice={start_mode}"));
     }

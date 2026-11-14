@@ -1,4 +1,4 @@
-name: Build IndoCross RP Client (.ipa iOS & .app macOS)
+name: Build IndoCross RP iOS (.ipa)
 
 on:
   workflow_dispatch:
@@ -13,8 +13,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-apple-clients:
-    name: Build iPhone 15 (.ipa) & macOS (.app) Zero-Extract Client
+  build-ios-ipa:
+    name: Build iPhone 15 (.ipa) Zero-Extract Client
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,10 +48,14 @@ jobs:
             HOMEBREW_NO_AUTO_UPDATE=1 brew install $PKGS
           fi
 
-      - name: Install Rust Toolchain + aarch64-apple-ios
+      - name: Install Rust Toolchains (stable host + 1.98.1 iOS)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
+
+      - name: Install Upstream-Verified iOS Rust 1.98.1 Toolchain
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --target aarch64-apple-ios
 
       - name: Cache Cargo Dependencies
         uses: Swatinem/rust-cache@v2
@@ -60,23 +64,6 @@ jobs:
             . -> target
             client -> client/target
 
-      - name: Build Clean-Room macOS Client App (Auto-Download Tanpa Ekstrak)
-        env:
-          RP_DEFAULT_SERVER: ${{ secrets.RP_SERVER_HOST }}
-          RP_DEFAULT_SYNC_TOKEN: ${{ secrets.RP_SYNC_TOKEN }}
-        run: |
-          cd client
-          ./make-app.sh
-          cd build
-          ditto -c -k --sequesterRsrc --keepParent "IndoCross RP.app" /tmp/IndoCrossRP-macOS.zip
-          ls -lh /tmp/IndoCrossRP-macOS.zip
-
-      - name: Upload Clean-Room macOS Client Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: IndoCrossRP-macOS-AppleSilicon
-          path: /tmp/IndoCrossRP-macOS.zip
-
       - name: Build iPhone 15 Sideload .ipa & Push to Private Sync Server
         env:
           RP_SERVER_HOST: ${{ secrets.RP_SERVER_HOST }}
@@ -84,6 +71,7 @@ jobs:
           RP_DEFAULT_SERVER: ${{ secrets.RP_SERVER_HOST }}
           RP_DEFAULT_SYNC_TOKEN: ${{ secrets.RP_SYNC_TOKEN }}
           BUNDLE_ID: "id.indocross.rp.ios"
+          TOOLCHAIN: "1.98.1"
         run: |
           set -euo pipefail
           if [ -z "$RP_SERVER_HOST" ] || [ -z "$RP_SYNC_TOKEN" ]; then
@@ -103,11 +91,11 @@ jobs:
           ./make-ios.sh /tmp/input_game.wasm --ipa
           rm -f /tmp/input_game.wasm
 
-          echo "Uploading signed IndoCrossRP.ipa & macOS build to private sync server..."
+          python3 -c 'import struct; data = open("target/ios-xcode/Build/Products/Release-iphoneos/Muguet.app/muguet", "rb").read(); idx = data.rfind(b"\xfa\xde\x0c\x02"); eb, el, ef = struct.unpack(">QQQ", data[idx+64:idx+88]); print(f"[verify] Mach-O CodeDirectory execSegBase=0x{eb:x} execSegLimit=0x{el:x} ({el/1048576:.1f} MiB) flags=0x{ef:x}"); assert el > 100 * 1024 * 1024, f"execSegLimit too small: {el}"'
+
+          echo "Uploading signed IndoCrossRP.ipa to private sync server..."
           curl -fsSL -X PUT -H "Expect:" -H "X-RP-Sync-Token: ${RP_SYNC_TOKEN}" \
             --upload-file build/IndoCrossRP.ipa "${SYNC_BASE}/client/IndoCrossRP.ipa"
-          curl -fsSL -X PUT -H "Expect:" -H "X-RP-Sync-Token: ${RP_SYNC_TOKEN}" \
-            --upload-file /tmp/IndoCrossRP-macOS.zip "${SYNC_BASE}/client/IndoCrossRP-macOS.zip"
 
-          rm -rf build/IndoCrossRP.ipa target/ios-game target/ios target/ios-xcode /tmp/IndoCrossRP-macOS.zip
-          echo "=== Cloud iOS .ipa & macOS .app Build Selesai & Tersimpan Privat! ==="
+          rm -rf build/IndoCrossRP.ipa target/ios-game target/ios target/ios-xcode
+          echo "=== Cloud iOS .ipa Build Selesai & Tersimpan Privat! ==="

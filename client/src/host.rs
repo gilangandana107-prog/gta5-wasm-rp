@@ -31,6 +31,12 @@ static STUB_SEQ: AtomicU64 = AtomicU64::new(0);
 
 static STOPPED: AtomicBool = AtomicBool::new(false);
 static FATAL: Mutex<Option<String>> = Mutex::new(None);
+static IOS_MEM_BUDGET: AtomicU64 = AtomicU64::new(0);
+
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub fn set_ios_memory_budget(bytes: u64) {
+    IOS_MEM_BUDGET.store(bytes, Ordering::SeqCst);
+}
 
 pub fn engine_stopped() -> bool {
     !STOPPED.swap(true, Ordering::Relaxed)
@@ -163,8 +169,19 @@ pub fn call(mut caller: Caller<'_, HostState>, idx: usize, params: &[Val], resul
         "emscripten_exit_with_live_runtime" => { PENDING_UNWIND.with(|c| c.set(true)); return Err(Unwind.into()); }
         "_emscripten_throw_longjmp" => { PENDING_LONGJMP.with(|c| c.set(true)); return Err(LongJmp.into()); }
         "exit" | "proc_exit" => {
-            eprintln!("[host] engine exit({})", int(params, 0));
-            std::process::exit(int(params, 0) as i32);
+            let code = int(params, 0) as i32;
+            eprintln!("[host] engine exit({code})");
+            #[cfg(target_os = "ios")]
+            if code != 0 {
+                let reason = FATAL
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or_else(|| format!("Engine keluar dengan kode {code}"));
+                crate::ios_fatal_alert(&reason);
+                loop { std::thread::park(); }
+            }
+            std::process::exit(code);
         }
         "_abort_js" => anyhow::bail!("engine called abort()"),
         "emscripten_num_logical_cores" => set_int(results, std::thread::available_parallelism().map(|n| n.get() as i64).unwrap_or(8)),
@@ -298,7 +315,20 @@ fn merge_physical_pages(mem: &SharedMemory, map: u64) {
 fn pool_grow(size: u64) -> bool {
     static CAP: LazyLock<u64> = LazyLock::new(|| {
         let mb = std::env::var("MUGUET_POOL_CAP_MB").ok().and_then(|v| v.parse::<u64>().ok());
-        mb.map(|mb| mb << 20).unwrap_or(if cfg!(target_os = "ios") { 2560 << 20 } else { u64::MAX })
+        mb.map(|mb| mb << 20).unwrap_or_else(|| {
+            if cfg!(target_os = "ios") {
+                let budget = IOS_MEM_BUDGET.load(Ordering::SeqCst);
+                if budget > 0 && budget < (4 << 30) {
+                    1024 << 20
+                } else if budget > 0 && budget < (5600 << 20) {
+                    2200 << 20
+                } else {
+                    2560 << 20
+                }
+            } else {
+                u64::MAX
+            }
+        })
     });
     let ok = size.saturating_add(STEP) <= CAP.saturating_add(16 << 20);
     static TOLD: AtomicBool = AtomicBool::new(false);
@@ -309,15 +339,21 @@ fn pool_grow(size: u64) -> bool {
 }
 
 fn resize_heap(mem: &SharedMemory, requested: u64) -> bool {
-    const MAX: u64 = 17_179_869_184;
+    let max: u64 = if cfg!(target_os = "ios") { crate::IOS_HEAP_MAX } else { 17_179_869_184 };
+    let low_ram_ios = cfg!(target_os = "ios") && {
+        let b = IOS_MEM_BUDGET.load(Ordering::SeqCst);
+        b > 0 && b < (4 << 30)
+    };
     let old = mem.data_size() as u64;
     if requested <= old { return false; }
-    if requested > MAX { return false; }
+    if requested > max { return false; }
     let mut cut = 1u64;
     while cut <= 4 {
-        let over = (old as f64 * (1.0 + 0.2 / cut as f64)) as u64;
-        let over = over.min(requested + 100_663_296);
-        let new = MAX.min(requested.max(over).div_ceil(65536) * 65536);
+        let growth_factor = if low_ram_ios { 0.05 } else { 0.2 };
+        let max_extra = if low_ram_ios { 16_777_216 } else { 100_663_296 };
+        let over = (old as f64 * (1.0 + growth_factor / cut as f64)) as u64;
+        let over = over.min(requested + max_extra);
+        let new = max.min(requested.max(over).div_ceil(65536) * 65536);
         let pages = (new - old).div_ceil(65536);
         if mem.grow(pages).is_ok() {
             eprintln!("[host] heap grown to {} MB", mem.data_size() >> 20);

@@ -201,12 +201,19 @@ impl App {
                 let rt = match rt.map(Ok).unwrap_or_else(|| crate::make_runtime(&startup)) {
                     Ok(rt) => rt,
                     Err(e) => {
-                        eprintln!("[host] {e:#}");
+                        eprintln!("[host] runtime init failed: {e:#}");
+                        #[cfg(target_os = "ios")]
+                        crate::ios_fatal_alert(&format!("Gagal menyiapkan engine:\n\n{e:#}"));
                         return;
                     }
                 };
                 if let Err(e) = crate::run_engine(&rt, args) {
                     eprintln!("[host] engine failed: {e:?}");
+                    #[cfg(target_os = "ios")]
+                    {
+                        crate::ios_fatal_alert(&format!("Engine error:\n\n{e:#}"));
+                        loop { std::thread::park(); }
+                    }
                 }
                 std::process::exit(0);
             })
@@ -241,6 +248,7 @@ impl App {
         if PLAY.load(Ordering::SeqCst) {
             let settings = crate::config::reload();
             let (limit, entitled) = unsafe { (muguet_memory_limit(), muguet_memory_entitled()) };
+            crate::host::set_ios_memory_budget(limit);
             eprintln!("[host] iOS gives the game {} MB, increased memory limit entitlement: {}", limit >> 20, match entitled { 1 => "yes", 0 => "no", _ => "unknown" });
             let uncapped = settings.iter().any(|a| a == "-frameLimit=0");
             unsafe { muguet_hold_refresh(if uncapped { 120.0 } else { 60.0 }) };

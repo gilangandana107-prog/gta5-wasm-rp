@@ -14,7 +14,7 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("ios") {
         return;
     }
-    println!("cargo:rustc-link-arg-bins=-Wl,-segprot,__GAME,rx,rx");
+    println!("cargo:rustc-link-arg-bins=-Wl,-headerpad_max_install_names");
 
     println!("cargo:rerun-if-changed=ios/Launcher.swift");
     let out = std::env::var("OUT_DIR").unwrap();

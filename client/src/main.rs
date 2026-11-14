@@ -160,6 +160,20 @@ fn raise_open_file_limit() {
 }
 
 fn main() -> Result<()> {
+    std::panic::set_hook(Box::new(|info| {
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".into());
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Box<dyn Any>".into()
+        };
+        eprintln!("[panic] at {loc}: {msg}");
+    }));
     raise_open_file_limit();
     heapcheck::start();
     let argv: Vec<String> = std::env::args().collect();
@@ -316,7 +330,7 @@ fn load_module(engine: &Engine, _startup: &config::Startup) -> Result<Module> {
 
 #[cfg(all(not(feature = "jit"), target_os = "ios", game_code))]
 std::arch::global_asm!(
-    ".section __GAME,__code,regular,pure_instructions",
+    ".section __TEXT,__game_code,regular",
     ".p2align 14",
     "_muguet_game_code:",
     concat!(".incbin \"", env!("MUGUET_GAME_CODE"), "\""),
@@ -405,7 +419,7 @@ fn compile_patched(engine: &Engine, wasm_path: &std::path::Path) -> Result<Modul
     Module::new(engine, &patched).map_err(anyhow::Error::from).context("compile module")
 }
 
-const IOS_HEAP_MAX: u64 = ios_heap_gb() << 30;
+pub const IOS_HEAP_MAX: u64 = ios_heap_gb() << 30;
 const fn ios_heap_gb() -> u64 {
     match option_env!("MUGUET_IOS_HEAP_GB") {
         Some(v) => {
@@ -544,9 +558,26 @@ fn run_pthread(rt: &Arc<Runtime>, ptr: u64, start_routine: u64, arg: u64) -> Res
 }
 
 fn stopped() {
-    if !host::engine_stopped() || cfg!(target_os = "ios") { return; }
+    if !host::engine_stopped() { return; }
     if let Some(reason) = host::stop_reason() {
+        eprintln!("[fatal] engine stopped: {reason}");
+        #[cfg(target_os = "ios")]
+        {
+            ios_fatal_alert(&format!("Engine berhenti:\n\n{reason}"));
+            loop { std::thread::park(); }
+        }
+        #[cfg(not(target_os = "ios"))]
         alert("Muguet stopped", &format!("The game hit an error and can't continue:\n\n{reason}"));
+    }
+}
+
+#[cfg(target_os = "ios")]
+pub fn ios_fatal_alert(msg: &str) {
+    extern "C" {
+        fn muguet_fatal_alert(msg: *const std::os::raw::c_char);
+    }
+    if let Ok(c) = std::ffi::CString::new(msg) {
+        unsafe { muguet_fatal_alert(c.as_ptr()) };
     }
 }
 

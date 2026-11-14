@@ -34,6 +34,21 @@ public func muguetMemoryEntitled() -> Int32 { hasMemoryEntitlement().map { $0 ? 
 
 let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 let configURL = documentsURL.appendingPathComponent("config.json")
+let prevLogURL = documentsURL.appendingPathComponent("indocross-prev.log")
+let bootLogURL = documentsURL.appendingPathComponent("indocross-boot.log")
+
+func isLiteCityPack() -> Bool {
+    let fm = FileManager.default
+    let mf = documentsURL.appendingPathComponent("game/data/manifest.json").path
+    let prol = documentsURL.appendingPathComponent("game/data/x64/audio/sfx/prologue.rpf").path
+    return fm.fileExists(atPath: mf) && !fm.fileExists(atPath: prol)
+}
+
+func readRecentLog(url: URL, maxLines: Int = 35) -> String? {
+    guard let txt = try? String(contentsOf: url, encoding: .utf8), !txt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+    let lines = txt.components(separatedBy: .newlines)
+    return lines.suffix(maxLines).joined(separator: "\n")
+}
 
 let savesRoot = documentsURL.appendingPathComponent("saves")
 let defaultTitle = "GTA V"
@@ -169,6 +184,7 @@ final class Settings: ObservableObject {
         if let v = json["graphics_preset"] as? String, let p = Preset(rawValue: v) { preset = p }
         else if json["texture_quality"] != nil { preset = .custom }
         if let v = json["start_mode"] as? Int, (1...2).contains(v) { mode = v }
+        if isLiteCityPack() && mode == 1 { mode = 2 }
         if let v = json["scale"] as? Double { scale = v }
         if let v = json["fps_limit"] as? Int { fps = v <= 0 ? 0 : v <= 30 ? 30 : 60 }
         if let v = json["texture_quality"] as? Int, (0...2).contains(v) { textures = v }
@@ -224,6 +240,27 @@ func muguet_game_ready() -> Bool
 func muguet_has_game_code() -> Bool
 @_silgen_name("muguet_send_rp_chat")
 func muguet_send_rp_chat(_ line: UnsafePointer<CChar>)
+
+@_cdecl("muguet_fatal_alert")
+public func muguetFatalAlert(_ msgPtr: UnsafePointer<CChar>?) {
+    let msg = msgPtr.map { String(cString: $0) } ?? "Unknown error"
+    DispatchQueue.main.async {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+              var top = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? scene.windows.first?.rootViewController else { return }
+        while let presented = top.presentedViewController { top = presented }
+        let tail = readRecentLog(url: bootLogURL, maxLines: 20) ?? ""
+        let fullMsg = tail.isEmpty ? msg : "\(msg)\n\n--- Log ---\n\(tail)"
+        let alert = UIAlertController(title: "IndoCross RP Terhenti", message: fullMsg, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Salin Log", style: .default) { _ in
+            UIPasteboard.general.string = (try? String(contentsOf: bootLogURL, encoding: .utf8)) ?? fullMsg
+            exit(1)
+        })
+        alert.addAction(UIAlertAction(title: "Tutup Aplikasi", style: .destructive) { _ in
+            exit(1)
+        })
+        top.present(alert, animated: true)
+    }
+}
 
 @_cdecl("muguet_prompt_rp_chat")
 public func muguetPromptRpChat() {
@@ -379,6 +416,8 @@ struct LauncherView: View {
     @State private var error: String?
     @State private var picking = false
     @State private var pickingSave = false
+    @State private var showingLog = false
+    @State private var prevLogText: String? = readRecentLog(url: prevLogURL)
     @Environment(\.scenePhase) private var phase
     let play: () -> Void
 
@@ -395,7 +434,15 @@ struct LauncherView: View {
                     if let error { Text(error).foregroundStyle(.red).font(.callout).multilineTextAlignment(.center) }
                     playButton
                     memoryView
-                    Button("Import other game data…") { picking = true }.font(.caption)
+                    HStack(spacing: 16) {
+                        Button("Import other game data…") { picking = true }.font(.caption)
+                        if prevLogText != nil {
+                            Button("📋 Lihat Log Terakhir") {
+                                prevLogText = readRecentLog(url: prevLogURL)
+                                showingLog = true
+                            }.font(.caption)
+                        }
+                    }
                 }
                 Text("proudly made by c22dev").font(.caption).foregroundStyle(.secondary)
             }
@@ -403,8 +450,10 @@ struct LauncherView: View {
             .frame(maxWidth: .infinity)
             Form {
                 Picker("Mode", selection: $s.mode) {
-                    Text("Story Mode").tag(1)
-                    Text("Sandbox").tag(2)
+                    if !isLiteCityPack() {
+                        Text("Story Mode").tag(1)
+                    }
+                    Text("Kota Roleplay (Sandbox)").tag(2)
                 }
                 Picker("Graphics", selection: $s.preset) {
                     ForEach(Preset.allCases, id: \.self) { p in
@@ -484,8 +533,19 @@ struct LauncherView: View {
         .fileImporter(isPresented: $picking, allowedContentTypes: [.zip]) { result in
             if case .success(let url) = result { importer.run(url) }
         }
-        .onAppear { importer.scan() }
+        .onAppear {
+            importer.scan()
+            if isLiteCityPack() && s.mode == 1 { s.mode = 2 }
+        }
         .onChange(of: phase) { p in if p == .active { importer.scan() } }
+        .alert("Log Sesi Sebelumnya", isPresented: $showingLog) {
+            Button("Salin Lengkap") {
+                UIPasteboard.general.string = (try? String(contentsOf: prevLogURL, encoding: .utf8)) ?? prevLogText ?? ""
+            }
+            Button("Tutup", role: .cancel) {}
+        } message: {
+            Text(prevLogText ?? "Kosong")
+        }
     }
 
     @ViewBuilder var importView: some View {
@@ -534,10 +594,10 @@ struct LauncherView: View {
         let gb = Double(memoryLimit()) / 1_073_741_824
         Text(String(format: "Memory for the game: %.1f GB", gb)).font(.caption).foregroundStyle(.secondary)
         if hasMemoryEntitlement() == false {
-            Text("This build wasn't signed with the increased memory limit, so the game will likely close after a few minutes. Re-sign it with AltStore or a developer account.")
+            Text("Sideloader kamu membatasi RAM di 3.0 GB (Mode Hemat RAM otomatis aktif). Untuk membuka RAM penuh ~5.0 GB di iPhone 15 agar jauh lebih stabil, install .ipa lewat AltStore.")
                 .font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
         } else if gb < 4 {
-            Text("That's not much for this game, so it may close after a few minutes.")
+            Text("RAM tersedia cukup terbatas, gunakan preset Battery agar lebih stabil.")
                 .font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
         }
     }
@@ -559,6 +619,7 @@ struct LauncherView: View {
     }
 
     func start() {
+        if isLiteCityPack() && s.mode == 1 { s.mode = 2 }
         if s.multiplayer && !s.host && s.server.trimmingCharacters(in: .whitespaces).isEmpty {
             error = "Enter the host's address to join."
             return
@@ -592,8 +653,11 @@ final class RefreshRate: NSObject {
 
     func hold(_ hz: Float) {
         link?.invalidate()
+        let screenMax = Float(max(UIScreen.main.maximumFramesPerSecond, 30))
+        let target = min(max(hz, 30), screenMax)
+        let minHz = min(Float(30), target)
         let l = CADisplayLink(target: self, selector: #selector(tick))
-        l.preferredFrameRateRange = CAFrameRateRange(minimum: hz, maximum: hz, preferred: hz)
+        l.preferredFrameRateRange = CAFrameRateRange(minimum: minHz, maximum: target, preferred: target)
         l.add(to: .main, forMode: .common)
         link = l
     }
